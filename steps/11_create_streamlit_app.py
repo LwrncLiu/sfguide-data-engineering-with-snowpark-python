@@ -87,10 +87,11 @@ def main():
 
     # Filter by city name and year using a sidebar widget
     city_name = st.sidebar.selectbox('Select a city:', sorted(df['CITY_NAME'].unique()), index=sorted(df['CITY_NAME'].unique()).index('Boston'))
+    month = st.sidebar.multiselect('Select month(s):', sorted(df['MONTH'].unique()), default=[1,2,3,4,5,6,7,8,9,10,11,12], key='month_filter')
     year = st.sidebar.multiselect('Select year(s):', sorted(df['YEAR'].unique()), default=[2022], key='year_filter')
 
     # Apply filters to df
-    mask = ((df['CITY_NAME'] == city_name) & (df['YEAR'].isin(year)))
+    mask = ((df['CITY_NAME'] == city_name) & (df['MONTH'].isin(month)) & (df['YEAR'].isin(year)))
     filtered_df = df[mask]
 
     # Add a title to the app
@@ -124,7 +125,8 @@ def main():
         st.altair_chart(p_v_s_chart, use_container_width=True)
 
     # create two tabs to switch between the two time series graphs
-    tab1, tab2 = st.tabs(['Sales v Temperature over Time', 'Sales v Preciptation over Time'])
+    st.subheader('Time Series Analysis')
+    tab1, tab2 = st.tabs(['Sales vs Temperature over Time', 'Sales vs Preciptation over Time'])
 
     # create a base chart with the month-year as the x-axis
     base = alt.Chart(filtered_df).encode(
@@ -142,7 +144,7 @@ def main():
         # add average temperature per month-year as the second y-axis
         temp_line = base.mark_line(color='#57A44C').encode(
             alt.Y('mean(TEMP_FAHRENHEIT)',
-                axis=alt.Axis(title='Avg. Temperature (°C)', titleColor='#57A44C'))
+                axis=alt.Axis(title='Avg. Temperature (°F)', titleColor='#57A44C'))
         )
         sales_v_temp_chart = alt.layer(sales_line, temp_line).resolve_scale(
             y = 'independent'
@@ -153,13 +155,54 @@ def main():
         # AVERAGE MONTHLY SALES v TOTAL MONTHLY PRECIPITATION
         # add total preciptation per month-year as the second y-axis
         precip_line = base.mark_line(color='#57A44C').encode(
-            alt.Y('sum(PRECIP_INCHES):Q', 
-                axis=alt.Axis(title='Monthly Precipitation', titleColor='#57A44C'))
+            alt.Y('mean(PRECIP_INCHES):Q', 
+                axis=alt.Axis(title='Avg. Precipitation', titleColor='#57A44C'))
         )
         sales_v_precip_chart = alt.layer(sales_line, precip_line).resolve_scale(
             y = 'independent'
         ).interactive()
         st.altair_chart(sales_v_precip_chart, use_container_width=True)
+
+    # CORRELATION MATRIX
+    st.subheader('Is there Any Correlation?')
+ 
+    corr_df = filtered_df[['DAILY_SALES', 'PRECIP_INCHES', 'TEMP_FAHRENHEIT', 'MONTHLY_AVG_PRECIP_INCHES', 'MONTHLY_AVG_TEMP_FAHRENHEIT']]
+    corr_df = corr_df.rename(columns={
+        'DAILY_SALES': 'Daily Sales',
+        'PRECIP_INCHES': 'Precip. (in)',
+        'TEMP_FAHRENHEIT': 'Temp. (°F)',
+        'MONTHLY_AVG_PRECIP_INCHES': 'Monthly Avg. Precip. (in)',
+        'MONTHLY_AVG_TEMP_FAHRENHEIT': 'Monthly Avg. Temp. (°F)'
+    })
+    corrMatrix = corr_df.corr().reset_index().melt('index')
+    corrMatrix.columns = ['var1', 'var2', 'correlation']
+
+    base = alt.Chart(corrMatrix).transform_filter(
+        alt.datum.var1 < alt.datum.var2
+    ).encode(
+        x=alt.X('var1:O', axis=alt.Axis(labelLimit=300)),
+        y=alt.Y('var2:O', axis=alt.Axis(labelLimit=300))
+    ).properties(
+        width=alt.Step(100),
+        height=alt.Step(100)
+    )
+
+    rects = base.mark_rect().encode(
+        color='correlation:Q'
+    )
+
+    text = base.mark_text(
+        size=30
+    ).encode(
+        text=alt.Text('correlation', format=".2f"),
+        color=alt.condition(
+            "datum.correlation > 0.5",
+            alt.value('white'),
+            alt.value('black')
+        )
+    )
+
+    st.altair_chart(rects + text, use_container_width=False)
 
     # st.checkbox value defaults to False
     show_df = st.checkbox('Show raw data')
