@@ -1,3 +1,5 @@
+import sys
+sys.path.append('../')
 from utils import snowpark_utils
 from snowflake.snowpark import Session
 import streamlit as st
@@ -34,7 +36,7 @@ def get_data():
                 over (partition by city_name 
                     order by date rows between 6 preceding and current row),0
                         ) as "7_DAY_AVG_SALES"
-            , iff(precip_inches > 0, 'Y', 'N') as precip_ind
+            , iff(precip_inches > 0, '🌧️', '☀️') as precip_ind
         from HOL_DB.ANALYTICS.DAILY_CITY_METRICS
     )
     , final as(
@@ -73,110 +75,98 @@ def get_data():
     # Return the DataFrame
     return df
 
-# Set the page title
-st.set_page_config(page_title='Sales Metrics')
+# Set the page title and layout
+st.set_page_config(page_title='Sales Metrics', layout='wide')
+
 
 # Create a Streamlit app
 def main():
 
-    # Add a title to the app
-    st.title('Sales Metrics')
-
     # Fetch data from Snowflake
     df = get_data()
 
-    # Filter by city name using a sidebar widget
-    # city_name = st.sidebar.selectbox('Select a city:', sorted(df['CITY_NAME'].unique()))
+    # Filter by city name and year using a sidebar widget
     city_name = st.sidebar.selectbox('Select a city:', sorted(df['CITY_NAME'].unique()), index=sorted(df['CITY_NAME'].unique()).index('Boston'))
-    # month = st.sidebar.selectbox('Select a month:', range(1, 12))
-    month = st.sidebar.multiselect('Select month(s):', sorted(df['MONTH'].unique()), default=[1], key='month_filter')
-    # year = st.sidebar.selectbox('Select a year:')
     year = st.sidebar.multiselect('Select year(s):', sorted(df['YEAR'].unique()), default=[2022], key='year_filter')
 
-    # Apply the city name filter
-    df = df[df['CITY_NAME'] == city_name]
-    df = df[df['MONTH'].isin(month)]
-    df = df[df['YEAR'].isin(year)]
+    # Apply filters to df
+    mask = ((df['CITY_NAME'] == city_name) & (df['YEAR'].isin(year)))
+    filtered_df = df[mask]
 
-    # Chart Title
-    st.subheader('Does Temperature Impact Sales?')
+    # Add a title to the app
+    st.title(f'{city_name} Sales Metrics')
 
-    # Create a chart using Altair
-    chart = alt.Chart(df).mark_circle().encode(
-        x='TEMP_FAHRENHEIT',
-        y='DAILY_SALES',
-        # color='7_DAY_AVG_SALES',
-        # size='DAILY_SALES'
-    ).interactive()
+    # create two columns to hold the daily sales scatter and box plots
+    col1, col2 = st.columns(2)
+
+    # SALES v TEMPERATURE SCATTER PLOT
+    with col1:
+        st.subheader('Does Temperature Impact Sales?')
+
+        s_v_t_chart = alt.Chart(filtered_df).mark_circle().encode(
+            x=alt.X('TEMP_FAHRENHEIT', title='Temperature (°F)'),
+            y=alt.Y('DAILY_SALES', title='Daily Sales')
+        ).interactive()
+        
+        # Display the chart
+        st.altair_chart(s_v_t_chart, use_container_width=True)
+
+    # SALES v PRECIPITATION BOX PLOT
+    with col2:
+        st.subheader('Does Precipitation Impact Sales?')
+
+        p_v_s_chart = alt.Chart(filtered_df).mark_boxplot(extent='min-max').encode(
+            x=alt.X('PRECIP_IND:O', title='Precipitation', axis=alt.Axis(labelAngle=0)), 
+            y=alt.Y('DAILY_SALES:Q', title='Daily Sales')
+        ).interactive()
+
+        # Display the chart
+        st.altair_chart(p_v_s_chart, use_container_width=True)
+
+    # create two tabs to switch between the two time series graphs
+    tab1, tab2 = st.tabs(['Sales v Temperature over Time', 'Sales v Preciptation over Time'])
+
+    # create a base chart with the month-year as the x-axis
+    base = alt.Chart(filtered_df).encode(
+        alt.X('yearmonth(DATE):T', axis=alt.Axis(title=None))
+    )
+
+    # add average daily sales per month-year as the first y-axis
+    sales_line = base.mark_line(interpolate='monotone').encode(
+        alt.Y('mean(DAILY_SALES)',
+              axis=alt.Axis(title='Avg. Daily Sales', titleColor='#5276A7'))
+    )
     
-    # Display the chart
-    st.altair_chart(chart, use_container_width=True)
+    with tab1:
+        # AVERAGE MONTHLY SALES v AVERAGE MONTHLY TEMPERATURE
+        # add average temperature per month-year as the second y-axis
+        temp_line = base.mark_line(color='#57A44C').encode(
+            alt.Y('mean(TEMP_FAHRENHEIT)',
+                axis=alt.Axis(title='Avg. Temperature (°C)', titleColor='#57A44C'))
+        )
+        sales_v_temp_chart = alt.layer(sales_line, temp_line).resolve_scale(
+            y = 'independent'
+        ).interactive()
+        st.altair_chart(sales_v_temp_chart, use_container_width=True)
+        
+    with tab2:
+        # AVERAGE MONTHLY SALES v TOTAL MONTHLY PRECIPITATION
+        # add total preciptation per month-year as the second y-axis
+        precip_line = base.mark_line(color='#57A44C').encode(
+            alt.Y('sum(PRECIP_INCHES):Q', 
+                axis=alt.Axis(title='Monthly Precipitation', titleColor='#57A44C'))
+        )
+        sales_v_precip_chart = alt.layer(sales_line, precip_line).resolve_scale(
+            y = 'independent'
+        ).interactive()
+        st.altair_chart(sales_v_precip_chart, use_container_width=True)
 
-    # Chart Title
-    st.subheader('Does Precipitation Impact Sales?')
+    # st.checkbox value defaults to False
+    show_df = st.checkbox('Show raw data')
 
-    # Create a chart using Altair
-    chart = alt.Chart(df).mark_circle().encode(
-        x='PRECIP_INCHES',
-        y='DAILY_SALES',
-        # color='7_DAY_AVG_SALES',
-        # size='DAILY_SALES'
-    ).interactive()
-
-    # Display the chart
-    st.altair_chart(chart, use_container_width=True)
-
-    # Chart Title
-    st.subheader('Is there Any Correlation?')
- 
-    # plotting correlation heatmap
-    dataplot = sb.heatmap(df.corr(), cmap="YlGnBu", annot=True, cbar=False)
-
-    # displaying heatmap
-    st.pyplot(dataplot.figure)
-    st.set_option('deprecation.showPyplotGlobalUse', False)
-
-    # Chart Title
-    st.subheader('Temperature vs. Daily Sales')
-
-    # Create a chart using Matplotlib
-    fig, ax = plt.subplots()
-    # Plot the 7-day average sales as a line plot
-    ax.plot(df['DATE'], df['7_DAY_AVG_SALES'], color='g', label='7-Day Avg Sales')
-    ax.scatter(df['DATE'], df['DAILY_SALES'], color='b', label='Daily Sales')
-    ax.set_xlabel('Date')
-    plt.xticks(rotation=70)
-    ax.set_ylabel('Daily Sales')
-    ax.legend()
-
-    # Create a second y-axis for temperature
-    ax2 = ax.twinx()
-    ax2.plot(df['DATE'], df['TEMP_FAHRENHEIT'], color='r', label='Temp Fahrenheit')
-    ax2.set_ylabel('Temperature (F)')
-
-    # Display the chart
-    st.pyplot(fig)
-
-    # Chart Title
-    st.subheader('Precip vs. Daily Sales')
-
-    # Create a chart using Matplotlib
-    fig, ax = plt.subplots()
-    # Plot the 7-day average sales as a line plot
-    ax.plot(df['DATE'], df['7_DAY_AVG_SALES'], color='g', label='7-Day Avg Sales')
-    ax.scatter(df['DATE'], df['DAILY_SALES'], color='b', label='Daily Sales')
-    ax.set_xlabel('Date')
-    plt.xticks(rotation=70)
-    ax.set_ylabel('Daily Sales')
-    ax.legend()
-
-    # Create a second y-axis for precipitation
-    ax2 = ax.twinx()
-    ax2.plot(df['DATE'], df['PRECIP_INCHES'], color='r', label='Precip Inches')
-    ax2.set_ylabel('Precip (Inches)')
-
-    # Display the chart
-    st.pyplot(fig)
+    # show dataframe is checkbox selected
+    if show_df:
+        st.dataframe(filtered_df, use_container_width=True)
 
 # Run the app
 if __name__ == '__main__':
